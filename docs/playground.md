@@ -29,6 +29,15 @@ carry GitHub rename redirects into cisagov — creating one hijacks the
 redirect, pushing through one writes to the real org. The driver
 verifies every name resolves inside the sandbox before touching it.
 
+**Maximum fidelity — the gh extension:** `dhs-ncats/gh-skeleton` is
+the real cisagov extension's history with the lineage subcommands
+committed on top (`gh skeleton sync|linearize|verify|verify-sync|
+publish|cache|stop|smoke`, dispatching into the vendored harness).
+Install it to drive scenarios the way the final tool will work (gh
+allows one extension per name, so temporarily swap the cisagov one
+out — the kit README has the exact commands). The future upstream PR
+is literally the sandbox repo's commits above cisagov's history.
+
 **Team access:** clone the kit —
 `gh repo clone dhs-ncats/lineage-playground` — and start at its
 README (prerequisites: org write access, headless commit signing).

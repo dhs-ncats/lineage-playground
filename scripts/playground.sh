@@ -246,12 +246,17 @@ quiet_ci() {
     while read -r id path; do
       case "$path" in
         */lineage-publish.yml|*/no-upstream-merges.yml) ;;
-        *) gh api -X PUT "repos/$PG_ORG/$name/actions/workflows/$id/disable" >/dev/null 2>&1 \
-             && say "$name: disabled ${path##*/}";;
+        *) if gh api -X PUT "repos/$PG_ORG/$name/actions/workflows/$id/disable" >/dev/null 2>&1; then
+             say "$name: disabled ${path##*/}"
+           else
+             warn "$name: could not disable ${path##*/} (dispatch-managed workflows refuse this)"
+           fi;;
       esac
     done < <(gh api "repos/$PG_ORG/$name/actions/workflows?per_page=100" \
                --jq '.workflows[] | select(.state=="active") | "\(.id) \(.path)"' 2>/dev/null)
   done
+  # a skipped/failed last iteration must not become the function's rc
+  return 0
 }
 
 cmd_setup() {
@@ -486,6 +491,27 @@ scripts/playground.sh reset       # start a session from the baseline
 ```
 
 Then follow the scenarios in `docs/playground.md`.
+
+## The gh extension (maximum fidelity)
+
+The real tool-to-be lives at `@ORG@/gh-skeleton`: the actual
+cisagov/gh-skeleton history with the lineage subcommands committed on
+top (`sync`, `linearize`, `verify`, `verify-sync`, `publish`,
+`cache`, `stop`, `smoke`). To drive scenarios through it instead of
+the scripts:
+
+```bash
+# gh allows ONE extension per name — swap out the cisagov one first:
+gh extension remove skeleton 2>/dev/null
+gh extension install @ORG@/gh-skeleton
+gh skeleton smoke                 # sandboxed self-test
+# scenario syncs, extension style (same env the playground driver uses):
+ORG_URL=https://github.com/@ORG@ \
+  CACHE_DIR="$PWD/work/playground/cache" WORK_DIR="$PWD/work/playground" \
+  gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner …
+# when done, restore the real one:
+gh extension remove skeleton && gh extension install cisagov/gh-skeleton
+```
 
 ## House rules
 

@@ -43,6 +43,27 @@ scripts/playground.sh reset       # start a session from the baseline
 
 Then follow the scenarios in `docs/playground.md`.
 
+## The gh extension (maximum fidelity)
+
+The real tool-to-be lives at `dhs-ncats/gh-skeleton`: the actual
+cisagov/gh-skeleton history with the lineage subcommands committed on
+top (`sync`, `linearize`, `verify`, `verify-sync`, `publish`,
+`cache`, `stop`, `smoke`). To drive scenarios through it instead of
+the scripts:
+
+```bash
+# gh allows ONE extension per name — swap out the cisagov one first:
+gh extension remove skeleton 2>/dev/null
+gh extension install dhs-ncats/gh-skeleton
+gh skeleton smoke                 # sandboxed self-test
+# scenario syncs, extension style (same env the playground driver uses):
+ORG_URL=https://github.com/dhs-ncats \
+  CACHE_DIR="$PWD/work/playground/cache" WORK_DIR="$PWD/work/playground" \
+  gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner …
+# when done, restore the real one:
+gh extension remove skeleton && gh extension install cisagov/gh-skeleton
+```
+
 ## House rules
 
 - **One driver at a time** — the sandbox repos are shared state.
