@@ -53,11 +53,17 @@ scripts/sync.sh --push <repo>   # interactive: push decoy + sync
   Deliberately **not** `lineage/skeleton`: that name belongs to
   action-lineage's hourly merge PRs (research §3); colliding with a
   live bot that pushes to it would be chaos.
+- `lineage/sync-review` — the PR's head: ONE generated commit
+  (machine-owned, regenerated and force-pushed on every refresh,
+  deliberately unsigned, never published) whose *tree* is
+  byte-identical to `lineage/sync` and whose *parent* is the develop
+  snapshot. That makes the Files tab exactly the sync delta — normal
+  inline review on the real change — the Commits tab one commit, and
+  the merge clean by construction.
 - `lineage/sync-base-<sha12>` — the **decoy** base the PR targets
-  instead of develop. Its *name* records the `origin/develop` SHA the
-  sync was built on (the publish lease value, in full in the PR-body
-  marker). Its *tip* is the upstream commit the sync rebased onto —
-  an ancestor of the head by construction.
+  instead of develop: the develop snapshot itself, with its SHA also
+  in the name and (in full) in the PR-body marker — it is the publish
+  lease value, and the merge commit's first parent cross-checks it.
 - `lineage/base` (a tag) — the parent tip this repo last synced onto,
   set by the publish workflow (from the `lineage-sync:onto` body
   marker). This is what makes tier ≥ 2 syncs tractable: a parent
@@ -77,41 +83,41 @@ draft state), the decoy makes it harmless-and-useful: the merge goes
 into a branch nobody consumes — develop is untouched by construction
 — and the merge *event* is the publish trigger.
 
-The decoy's tip must be an **ancestor of the head** (the upstream
-commit rebased onto; the old develop tip when there are no downstream
-commits). A snapshot of develop does not work: GitHub greys out the
-merge button when base and head conflict, and a rebased branch
+The decoy's tip must be an **ancestor of the head**, or GitHub greys
+out the merge button whenever base and head conflict. The rebased
+branch itself can never satisfy that against a develop snapshot (it
 conflicts with the develop it was rebased from in exactly the hotspot
-files — i.e. on exactly the syncs that had conflicts, the publish
-trigger would be unclickable (caught by `smoke-test-sync.sh` §5).
-With an ancestor base the merge is always clean, and the Files tab
-shows the replayed downstream stack. The real review artifact — what
-will change on develop — is `git diff develop..lineage/sync`, posted
-in the PR body.
+files) — which is why the head is the **review proxy**: a single
+commit parented ON the snapshot, carrying the rebase result's tree.
+Base = its parent ⇒ always mergeable; Files tab = exactly what will
+change on develop; and the proxy can't smuggle anything past review,
+because publish requires its tree to be byte-identical to
+`lineage/sync` — the branch that actually gets published, with its
+real per-commit, signed history.
 
-The develop snapshot travels in the decoy's *name* and the PR-body
-marker instead of its tip. That is safe because the lease is
-self-enforcing: publish succeeds only if develop still equals the
-recorded value, so a wrong or tampered marker can only make publish
-refuse, never overwrite.
+The lease is self-enforcing: publish succeeds only if develop still
+equals the recorded snapshot, so a wrong or tampered marker can only
+make publish refuse, never overwrite.
 
 ### Merge-to-publish
 
 `ci/lineage-publish.yml` (drop-in, merged to develop before the first
 sync cycle) triggers on `pull_request_target: closed`.
-Guards: `merged == true`, head is `lineage/sync`, base matches
+Guards: `merged == true`, head is `lineage/sync-review`, base matches
 `lineage/sync-base-*`. It then:
 
-1. Reads the develop snapshot SHA from the PR-body marker,
-   cross-checked against the decoy's name, and verifies the reviewed
-   head is the merge commit's second parent.
-2. Pushes the **reviewed** head SHA (from the event payload, not the
-   branch tip — a refresh could race) to develop with
+1. Reads the develop snapshot from the PR-body marker, cross-checked
+   against the decoy's name AND the merge commit's first parent;
+   verifies the reviewed proxy is the merge's second parent.
+2. Verifies the reviewed proxy's **tree is byte-identical** to the
+   recorded `lineage/sync` tip (`lineage-sync:pushed-sha` marker) —
+   a mismatch means the sync branch changed after review; refuse.
+3. Pushes **the real branch tip** (not the proxy) to develop with
    `--force-with-lease=develop:<snapshot>`. If anything reached
    develop mid-review, the lease fails instead of destroying it.
-3. Deletes the decoy and the sync branch (their content is now
-   develop) and comments the outcome on the PR (success, or
-   lease-failure instructions: re-run `sync.sh`, fresh PR).
+4. Records `lineage/base`, deletes all three review branches (decoy,
+   sync, proxy), and comments the outcome on the PR (success, or
+   refusal instructions: re-run `sync.sh`, fresh PR).
 
 The workflow moves a ref; it creates no commits, so the
 signed-commits policy is untouched — every commit above upstream was
@@ -158,11 +164,11 @@ Use org-level rulesets so one definition covers the fleet.
 - **One stable branch name, one open PR.** Refresh updates the
   existing PR (retargeting its base to a fresh decoy when develop
   moved) rather than opening siblings.
-- **Review artifact in the body.** The PR body carries the command
-  for `git diff develop..lineage/sync` (the upstream delta plus
-  resolutions) — the thing to actually review, since the Files tab
-  diffs against the upstream snapshot and therefore shows the
-  replayed downstream stack, not the incoming sync.
+- **The Files tab is the review artifact.** The proxy head makes
+  GitHub's native review surface show exactly the sync delta (inline
+  comments, viewed checkboxes — the standard process). The published
+  commits with their real authorship live on `lineage/sync`; the body
+  carries the `git log` command for reviewers who want them.
 
 ## Scope and coexistence
 
@@ -197,6 +203,8 @@ Use org-level rulesets so one definition covers the fleet.
 |---|---|
 | Feature PR merges into develop mid-review | Publish lease fails; workflow comments; re-run `sync.sh` (new decoy, retargeted PR) |
 | Human pushes to `lineage/sync` | Next `--push` refuses (marker mismatch); coordinate or delete the branch |
+| Human pushes to `lineage/sync-review` | Machine-owned: overwritten on every refresh (the body says so); nothing can be published from it anyway — only tree-verified `lineage/sync` is |
+| Sync branch refreshed after review (proxy stale) | Publish refuses: reviewed proxy tree ≠ recorded `lineage/sync` tree; re-run `--push` for a fresh proxy + re-review |
 | Someone clicks "Update branch" on the PR | Head gains a merge commit ⇒ `lineage/verify` is stale ⇒ required check blocks merge |
 | PR retargeted to develop and merged | Develop's ruleset is the backstop (linear history rejects the braid); `no-upstream-merges.yml` is the CI tripwire |
 | Workflow absent/broken at merge time | Merge hits only the decoy; nothing published; delete decoy, re-run `--push` |

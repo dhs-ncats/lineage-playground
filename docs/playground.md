@@ -85,10 +85,12 @@ gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
 gh skeleton sync --push --yes --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
 ```
 
-Reviewer: open the PR in `dhs-ncats/sandbox-skeleton-ansible-role`. Notice:
-base is the decoy (`lineage/sync-base-<sha>`), the `lineage/verify`
-status is green, the body explains itself and carries the real review
-diff command. Approve, **merge**.
+Reviewer: open the PR in `dhs-ncats/sandbox-skeleton-ansible-role`.
+Notice: the **Files tab shows exactly the sync delta** (here: two
+lines in `.pre-commit-config.yaml`) — the head is a generated review
+proxy whose tree is byte-identical to the real rebased branch; the
+base is the decoy (`lineage/sync-base-<sha>`); `lineage/verify` is
+green. Review it like any PR. Approve, **merge**.
 
 Watch the `lineage-publish` Actions run: it force-pushes the reviewed
 SHA to develop with the lease, deletes the review branches, and
@@ -180,19 +182,17 @@ survives. That's the Renovate etiquette, reimplemented.
 
 ---
 
-## What to evaluate while playing (for the review-process question)
+## The review surface
 
-The open design question is the **review surface**: in the current
-variant the PR's Files tab shows the replayed downstream stack (diff
-vs the upstream snapshot), and the true sync delta is a command in
-the body — inline comments on the real change aren't possible. A
-**review-proxy variant** (PR head = one generated commit whose tree
-is byte-identical to the sync result, based on the develop snapshot)
-would put exactly the sync delta in the Files tab, with normal inline
-review; the workflow would verify tree-equality before publishing.
-Run scenario 3 and judge the current variant's review experience —
-if it confirms the non-starter, the proxy variant is the planned
-follow-up and this playground is where it gets A/B'd.
+The PR head is a **review proxy**: one generated commit, parented on
+the develop snapshot, whose tree is byte-identical to the real
+rebased branch — so the Files tab shows exactly the sync delta and
+the standard review process (inline comments, viewed checkboxes)
+applies to the real change. Publish refuses unless the reviewed tree
+equals `lineage/sync`, and what reaches develop is that branch's
+real, signed, per-commit history. (Adopted 2026-11-12 after the team
+hit the alternative's Files tab showing the whole replayed downstream
+stack; worklog §49.)
 
 ## Housekeeping
 

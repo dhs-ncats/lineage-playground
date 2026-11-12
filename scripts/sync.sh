@@ -101,25 +101,32 @@ do_push() {
   say "running sync acceptance checks first…"
   "$ROOT/scripts/verify-sync.sh" "$REPO" || die "verify failed — not pushing"
 
-  local head decoy decoy_sha remote_tip expected
+  local head decoy decoy_sha proxy remote_tip expected
   head=$(git rev-parse develop-sync)
-  # The decoy's NAME carries the develop snapshot the publish lease
-  # enforces; its TIP must be an ancestor of head, or GitHub's
-  # mergeability check greys out the merge button on exactly the
-  # syncs that had conflicts. The upstream commit we rebased onto is
-  # always such an ancestor (and the diff vs it is the replayed
-  # downstream stack). When there are no downstream commits
-  # (head == S_ONTO), fall back to the old develop tip, which is then
-  # an ancestor too.
+  # REVIEW PROXY model (worklog §49): the PR's head is a single
+  # generated commit whose TREE is byte-identical to the rebase
+  # result, parented on the develop snapshot. GitHub's Files tab then
+  # shows exactly the sync delta (inline review works on the real
+  # change), the merge is clean by construction (base = the proxy's
+  # parent), and the publish workflow refuses unless the reviewed
+  # proxy's tree equals the real branch's tree. The decoy's tip IS
+  # the develop snapshot, so the merge commit's first parent
+  # cross-checks the lease value in its name.
   decoy="lineage/sync-base-${S_BASE:0:12}"
-  decoy_sha=$S_ONTO
-  [[ "$head" == "$S_ONTO" ]] && decoy_sha=$S_BASE
+  decoy_sha=$S_BASE
+  proxy=$(git commit-tree 'develop-sync^{tree}' -p "$S_BASE" \
+    -m "Lineage sync review proxy: tree of lineage/sync @ ${head:0:12}" \
+    -m "Generated for review only — never published. The real rebased
+history is on lineage/sync; the publish workflow verifies this
+commit's tree is byte-identical to that branch before force-pushing
+it to the default branch. Deliberately unsigned.")
 
   if is_github; then
     echo
     say "about to push review artifacts for $(basename "$ORG_URL")/$REPO:"
-    say "  decoy base : $decoy @ ${decoy_sha:0:12} (name records origin/$BRANCH = ${S_BASE:0:12})"
+    say "  decoy base : $decoy @ ${decoy_sha:0:12} (= origin/$BRANCH snapshot, the lease value)"
     say "  sync branch: lineage/sync → $(git rev-parse --short develop-sync) (force-with-lease)"
+    say "  review head: lineage/sync-review → ${proxy:0:7} (1 commit; tree == lineage/sync)"
     say "  then       : open/refresh the PR + post lineage/verify"
     say "  NOT pushed : $BRANCH (publication = merging the PR)"
     if [[ $YES -eq 1 ]]; then
@@ -146,8 +153,9 @@ do_push() {
   remote_tip=$(git ls-remote --heads origin lineage/sync | cut -f1)
   expected=$(cat .git/SYNC_PUSHED 2>/dev/null || true)
   if [[ -z "$expected" && -n "$remote_tip" ]] && is_github && command -v gh >/dev/null; then
-    # fresh clone: recover the marker from the open PR's body
-    expected=$(gh pr list -R "$(basename "$ORG_URL")/$REPO" --head lineage/sync --state open \
+    # fresh clone: recover the marker from the open PR's body (the PR's
+    # head is the review proxy; pushed-sha records the SYNC branch tip)
+    expected=$(gh pr list -R "$(basename "$ORG_URL")/$REPO" --head lineage/sync-review --state open \
       --json body --jq '.[0].body' 2>/dev/null \
       | sed -n 's/.*lineage-sync:pushed-sha=\([0-9a-f]\{40\}\).*/\1/p' | head -1 || true)
   fi
@@ -184,6 +192,12 @@ do_push() {
   printf '%s\n' "$head" > .git/SYNC_PUSHED
   say "pushed lineage/sync @ $(git rev-parse --short develop-sync)"
 
+  # ── review proxy: a generated artifact, machine-owned — regenerated
+  #    (and force-pushed) on every refresh; humans resolve on the SYNC
+  #    branch, never here ─────────────────────────────────────────────
+  git push -qf origin "$proxy:refs/heads/lineage/sync-review"
+  say "pushed lineage/sync-review @ ${proxy:0:7}"
+
   if ! is_github || ! command -v gh >/dev/null; then
     say "non-GitHub remote (or no gh) — skipping PR/status steps"
     return 0
@@ -196,20 +210,26 @@ do_push() {
   {
     echo "## Lineage sync: rebase onto \`$PARENT\` @ \`$(git rev-parse --short "upstream/$BRANCH")\`"
     echo
-    echo "**Merging this PR publishes.** The base (\`$decoy\`) is a decoy that"
-    echo "absorbs the merge; its name records the \`$BRANCH\` snapshot this sync"
-    echo "was built on. On merge, \`lineage-publish.yml\` force-pushes the"
-    echo "reviewed head SHA to \`$BRANCH\` with a lease against that snapshot —"
+    echo "**Merging this PR publishes.** The *Files changed* tab IS the sync"
+    echo "delta — exactly what will change on \`$BRANCH\`. The head is a"
+    echo "generated REVIEW PROXY (one commit whose tree is byte-identical to"
+    echo "the real rebased history on \`lineage/sync\`); the base (\`$decoy\`) is"
+    echo "a decoy snapshot of \`$BRANCH\` that absorbs the merge. On merge,"
+    echo "\`lineage-publish.yml\` verifies the reviewed tree equals"
+    echo "\`lineage/sync\`, then force-pushes THAT branch (the real, signed,"
+    echo "per-commit history) to \`$BRANCH\` with a lease against the snapshot —"
     echo "if anything reached \`$BRANCH\` mid-review, publish refuses instead of"
     echo "overwriting it. See \`lineage-rework/design.md\`."
     echo
-    echo "- The *Files changed* tab diffs against the upstream tip, so it shows"
-    echo "  this repo's replayed downstream commits — not the incoming sync."
-    echo "- Review the actual sync delta (what will change on \`$BRANCH\`):"
+    echo "- Review here as usual; the commits being published (with their real"
+    echo "  authorship) are on \`lineage/sync\`:"
     echo
     echo '```'
-    echo "git fetch origin && git diff origin/$BRANCH..origin/lineage/sync"
+    echo "git fetch origin && git log origin/$BRANCH..origin/lineage/sync"
     echo '```'
+    echo
+    echo "- Never push to \`lineage/sync-review\` — it is regenerated on every"
+    echo "  refresh. Conflict resolutions happen on \`lineage/sync\`."
     echo
     echo "Delta vs \`$BRANCH\`: $(git diff --shortstat "$S_BASE"..develop-sync | sed 's/^ *//')"
     echo "Upstream commits synced: $(git rev-list --topo-order --count "$S_BASE..upstream/$BRANCH")"
@@ -220,20 +240,20 @@ do_push() {
     echo "<!-- lineage-sync:onto=$S_ONTO -->"
   } > "$body"
 
-  pr=$(gh pr list -R "$gr" --head lineage/sync --state open --json number --jq '.[0].number' 2>/dev/null || true)
+  pr=$(gh pr list -R "$gr" --head lineage/sync-review --state open --json number --jq '.[0].number' 2>/dev/null || true)
   if [[ -n "$pr" ]]; then
     gh pr edit "$pr" -R "$gr" --base "$decoy" --body-file "$body" >/dev/null
     say "refreshed PR #$pr (base retargeted to $decoy)"
   else
-    gh pr create -R "$gr" --base "$decoy" --head lineage/sync \
+    gh pr create -R "$gr" --base "$decoy" --head lineage/sync-review \
       --title "Lineage sync: $PARENT @ $(git rev-parse --short "upstream/$BRANCH")" \
       --body-file "$body"
   fi
   rm -f "$body"
 
-  gh api "repos/$gr/statuses/$head" -f state=success -f context=lineage/verify \
+  gh api "repos/$gr/statuses/$proxy" -f state=success -f context=lineage/verify \
     -f description="sync acceptance checks 7/7 (verify-sync.sh, local)" >/dev/null
-  say "posted lineage/verify=success on ${head:0:12}"
+  say "posted lineage/verify=success on ${proxy:0:12}"
 
   # retire decoys from superseded cycles
   while read -r _ ref; do

@@ -76,34 +76,42 @@ parent_bump() { # parent_bump MSG — commit whatever $T/p holds, push
 }
 
 # simulate_publish — what GitHub + ci/lineage-publish.yml do on merge:
-# merge lineage/sync into the decoy (clean by construction — the
-# decoy tip is an ancestor of head), recover the develop snapshot
-# from the decoy's name (the workflow reads the full SHA from the PR
-# body marker; same value), verify the reviewed SHA is the merge's
-# second parent, lease-push to develop, retire the review branches.
-# Returns 1 when the lease refuses.
+# merge the REVIEW PROXY (lineage/sync-review) into the decoy (clean
+# by construction — the decoy tip is the proxy's parent), recover the
+# develop snapshot from the decoy's name (the workflow reads the full
+# SHA from the PR body marker; same value), verify the reviewed proxy
+# is the merge's second parent, the decoy tip is the snapshot, and
+# the proxy's TREE is byte-identical to the real lineage/sync branch
+# — then lease-push THAT branch to develop and retire all three
+# review branches. Returns 1 when the lease refuses.
 simulate_publish() {
-  local m="$T/merge-sim" decoy snap embedded headsha M
+  local m="$T/merge-sim" decoy snap embedded proxy real M
   rm -rf "$m"
   git clone -q "$BARE" "$m"
   decoy=$(git -C "$m" for-each-ref --format='%(refname:short)' \
     'refs/remotes/origin/lineage/sync-base-*' | head -1)
   decoy=${decoy#origin/}
   [[ -n "$decoy" ]] || { echo "    (no decoy branch found)"; return 2; }
-  headsha=$(git -C "$m" rev-parse origin/lineage/sync)
+  proxy=$(git -C "$m" rev-parse origin/lineage/sync-review)
+  real=$(git -C "$m" rev-parse origin/lineage/sync)
   git -C "$m" switch -qc merge-target "origin/$decoy"
-  git -C "$m" merge -q --no-ff -m "Merge pull request (simulated)" origin/lineage/sync \
+  git -C "$m" merge -q --no-ff -m "Merge pull request (simulated)" origin/lineage/sync-review \
     || { echo "    (merge into decoy conflicted — must be clean by construction)"; return 2; }
   git -C "$m" push -q origin "HEAD:refs/heads/$decoy"
   M=$(git -C "$m" rev-parse HEAD)
   embedded=${decoy#lineage/sync-base-}
   snap=$(git -C "$m" rev-parse -q --verify "${embedded}^{commit}") \
     || { echo "    (snapshot $embedded unresolvable)"; return 2; }
-  [[ "$(git -C "$m" rev-parse "$M^2")" == "$headsha" ]] \
-    || { echo "    (merge second parent != reviewed head)"; return 2; }
+  [[ "$(git -C "$m" rev-parse "$M^2")" == "$proxy" ]] \
+    || { echo "    (merge second parent != reviewed proxy)"; return 2; }
+  [[ "$(git -C "$m" rev-parse "$M^1")" == "$snap" ]] \
+    || { echo "    (decoy tip != snapshot)"; return 2; }
+  [[ "$(git -C "$m" rev-parse "$proxy^{tree}")" == "$(git -C "$m" rev-parse "$real^{tree}")" ]] \
+    || { echo "    (proxy tree != lineage/sync tree)"; return 2; }
   if git -C "$m" push -q --force-with-lease="refs/heads/develop:$snap" \
-       origin "$headsha:refs/heads/develop" 2>/dev/null; then
-    git -C "$m" push -q origin ":refs/heads/$decoy" ":refs/heads/lineage/sync"
+       origin "$real:refs/heads/develop" 2>/dev/null; then
+    git -C "$m" push -q origin ":refs/heads/$decoy" ":refs/heads/lineage/sync" \
+      ":refs/heads/lineage/sync-review"
     return 0
   fi
   return 1
@@ -127,13 +135,20 @@ grep -q 'stops=0' "$RESLOG" && ok "zero stops" || bad "expected zero stops"
 echo "── 2. --push artifacts (local remote: non-interactive, gh skipped)"
 "$HERE/sync.sh" --push child >/dev/null || bad "--push exited $?"
 S_BASE=$(sed -n 's/^S_BASE=//p' "$WT/.git/SYNC_STATE")
-S_ONTO=$(sed -n 's/^S_ONTO=//p' "$WT/.git/SYNC_STATE")
 DECOY="lineage/sync-base-${S_BASE:0:12}"
 head=$(git -C "$WT" rev-parse develop-sync)
-[[ "$(git -C "$BARE" rev-parse "refs/heads/$DECOY" 2>/dev/null)" == "$S_ONTO" ]] \
-  && ok "decoy tip = upstream snapshot (name records the develop SHA)" || bad "decoy base wrong/missing"
+[[ "$(git -C "$BARE" rev-parse "refs/heads/$DECOY" 2>/dev/null)" == "$S_BASE" ]] \
+  && ok "decoy tip = the develop snapshot (the lease value)" || bad "decoy base wrong/missing"
 [[ "$(git -C "$BARE" rev-parse refs/heads/lineage/sync 2>/dev/null)" == "$head" ]] \
   && ok "lineage/sync pushed" || bad "lineage/sync wrong/missing"
+proxy=$(git -C "$BARE" rev-parse refs/heads/lineage/sync-review 2>/dev/null || true)
+if [[ -n "$proxy" \
+      && "$(git -C "$BARE" rev-parse "$proxy^1")" == "$S_BASE" \
+      && "$(git -C "$BARE" rev-parse "$proxy^{tree}")" == "$(git -C "$WT" rev-parse 'develop-sync^{tree}')" ]]; then
+  ok "review proxy: 1 commit on the snapshot, tree == lineage/sync"
+else
+  bad "review proxy wrong/missing"
+fi
 [[ "$(cat "$WT/.git/SYNC_PUSHED" 2>/dev/null)" == "$head" ]] \
   && ok "pushed-sha marker written" || bad "marker missing"
 
