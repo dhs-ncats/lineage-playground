@@ -73,6 +73,7 @@ S_BRANCH=$BRANCH
 S_PARENT=$PARENT
 S_BASE=$S_BASE
 S_ONTO=$S_ONTO
+S_FROM=$S_FROM
 S_STOP=$STOP
 S_RERERE_HITS=$RERERE_HITS
 S_MANUAL=$MANUAL
@@ -211,11 +212,12 @@ do_push() {
     echo '```'
     echo
     echo "Delta vs \`$BRANCH\`: $(git diff --shortstat "$S_BASE"..develop-sync | sed 's/^ *//')"
-    echo "Upstream commits synced: $(git rev-list --count "$S_BASE..upstream/$BRANCH")"
+    echo "Upstream commits synced: $(git rev-list --topo-order --count "$S_BASE..upstream/$BRANCH")"
     echo "Resolution log: \`campaign/logs/$REPO-sync-resolutions.md\` (stops=$STOP rerere=$RERERE_HITS manual=$MANUAL)"
     echo
     echo "<!-- lineage-sync:pushed-sha=$head -->"
     echo "<!-- lineage-sync:base=$S_BASE -->"
+    echo "<!-- lineage-sync:onto=$S_ONTO -->"
   } > "$body"
 
   pr=$(gh pr list -R "$gr" --head lineage/sync --state open --json number --jq '.[0].number' 2>/dev/null || true)
@@ -249,7 +251,7 @@ if [[ $PUSH -eq 1 ]]; then
 fi
 
 # ════ sync phase ═════════════════════════════════════════════════════
-STOP=0 RERERE_HITS=0 MANUAL=0 S_BASE="" S_ONTO=""
+STOP=0 RERERE_HITS=0 MANUAL=0 S_BASE="" S_ONTO="" S_FROM=""
 
 if [[ $RESUME -eq 1 ]]; then
   [[ -d "$WT/.git" ]] || die "--resume but no work tree at $WT"
@@ -301,6 +303,10 @@ if [[ $RESUME -eq 0 ]]; then
   S_ONTO=$(git rev-parse "$UPSTREAM_REF")
   say "upstream: $UPSTREAM_REF ($(git rev-parse --short "$UPSTREAM_REF"))  base: origin/$BRANCH (${S_BASE:0:12})"
 
+  # exact range walks on skewed linear history need a commit-graph
+  # AND --topo-order (worklog §47)
+  git commit-graph write --reachable 2>/dev/null || true
+
   git merge-base "origin/$BRANCH" "$UPSTREAM_REF" >/dev/null 2>&1 \
     || die "$REPO shares no history with $PARENT — wrong parent?"
   if git merge-base --is-ancestor "$UPSTREAM_REF" "origin/$BRANCH"; then
@@ -312,7 +318,7 @@ if [[ $RESUME -eq 0 ]]; then
   fi
   # sync presumes the linear model: a braid above upstream means this
   # repo was never linearized (or regressed — see no-upstream-merges.yml)
-  merges=$(git rev-list --merges "$(git merge-base "origin/$BRANCH" "$UPSTREAM_REF")..origin/$BRANCH" | wc -l)
+  merges=$(git rev-list --topo-order --merges "$(git merge-base "origin/$BRANCH" "$UPSTREAM_REF")..origin/$BRANCH" | wc -l)
   [[ "$merges" -eq 0 ]] \
     || die "$merges merge commit(s) above upstream — $REPO isn't linearized; run linearize.sh first (runbook §4)"
 
@@ -328,8 +334,27 @@ if [[ $RESUME -eq 0 ]]; then
     warn "commit signing is OFF — replayed commits will be unsigned and verify-sync will fail them (team policy, worklog §31)"
   fi
 
-  n_up=$(git rev-list --count "origin/$BRANCH..$UPSTREAM_REF")
-  n_down=$(git rev-list --count "$UPSTREAM_REF..origin/$BRANCH")
+  n_up=$(git rev-list --topo-order --count "origin/$BRANCH..$UPSTREAM_REF")
+  # The ONLY-OUR-DELTA rule (worklog §47): a parent publish rewrites
+  # every inherited SHA, so a plain `rebase upstream/develop` would
+  # replay the repo's ENTIRE inherited stack — spurious conflicts from
+  # inherited add/remove pairs, and unverifiable drops. The previous
+  # publish recorded the parent tip it synced onto as the lineage/base
+  # tag; rebase --onto from there replays only this repo's own
+  # commits. No tag (first sync, or tier-1 where the root is never
+  # rewritten) → full rebase, which is then equivalent.
+  git fetch -q origin '+refs/tags/lineage/base:refs/tags/lineage/base' 2>/dev/null || true
+  REBASE_FROM="$UPSTREAM_REF"
+  if git rev-parse -q --verify 'refs/tags/lineage/base^{commit}' >/dev/null; then
+    base_tag=$(git rev-parse 'refs/tags/lineage/base^{commit}')
+    if git merge-base --is-ancestor "$base_tag" "origin/$BRANCH"; then
+      REBASE_FROM=$base_tag
+      say "lineage/base tag found (${REBASE_FROM:0:12}) — replaying only this repo's own delta"
+    else
+      warn "lineage/base tag (${base_tag:0:12}) is not an ancestor of origin/$BRANCH — stale; falling back to a full rebase"
+    fi
+  fi
+  n_down=$(git rev-list --topo-order --count "$REBASE_FROM..origin/$BRANCH")
   say "replaying $n_down downstream commits onto $n_up new upstream commits"
 
   : > "$RESLOG"
@@ -337,16 +362,17 @@ if [[ $RESUME -eq 0 ]]; then
     echo "# Sync resolution log — $REPO ($(date -I))"
     echo
     echo "- Parent: \`$PARENT\` @ \`$(git rev-parse --short "$UPSTREAM_REF")\`"
-    echo "- Base: \`origin/$BRANCH\` @ \`${S_BASE:0:12}\`"
+    echo "- Base: \`origin/$BRANCH\` @ \`${S_BASE:0:12}\` (replay from \`${REBASE_FROM:0:12}\`)"
     echo "- Downstream commits replayed: $n_down (over $n_up new upstream)"
     echo
     echo "| # | Replaying | Files | Handled by | Notes |"
     echo "|--:|---|---|---|---|"
   } >> "$RESLOG"
 
+  S_FROM=$REBASE_FROM
   save_state
   git switch -q -C develop-sync "origin/$BRANCH"
-  git rebase --committer-date-is-author-date "$UPSTREAM_REF" >/dev/null 2>&1 \
+  git rebase --committer-date-is-author-date --onto "$UPSTREAM_REF" "$REBASE_FROM" >/dev/null 2>&1 \
     && say "rebase completed with zero stops"
 fi
 

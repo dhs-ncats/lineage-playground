@@ -1,10 +1,15 @@
 # Lineage sync playground kit (SANDBOX)
 
 Hands-on rehearsal of the rebase-based lineage sync + merge-to-publish
-flow, against live sandbox repos in the `dhs-ncats` org. Nothing here can
-touch cisagov: the driver refuses it outright.
+flow, against a live two-tier sandbox lineage in the `dhs-ncats` org
+(sandbox-skeleton-generic → sandbox-skeleton-ansible-role →
+sandbox-ansible-role-banner, seeded from the real cisagov histories).
+Nothing here can touch cisagov: the driver refuses it outright and
+verifies every repo name resolves inside the sandbox (the org's bare
+historical names carry rename redirects into cisagov — never create
+or push to one).
 
-**Start here: [`docs/playground.md`](docs/playground.md)** — five
+**Start here: [`docs/playground.md`](docs/playground.md)** — the
 day-in-the-life scenarios (~5–10 min each). Design and context:
 [`docs/design.md`](docs/design.md),
 [`docs/team-decisions.md`](docs/team-decisions.md).
@@ -16,10 +21,8 @@ day-in-the-life scenarios (~5–10 min each). Design and context:
   (`gh auth refresh -s workflow` if pushes of workflow files are
   refused).
 - Commit signing that works WITHOUT prompting — the sync re-signs
-  every replayed commit. Test: your key signs headlessly if
-  `echo t | gpg --batch --pinentry-mode error -u <KEY> --detach-sign
-  >/dev/null` succeeds. No signing set up? A passwordless SSH signing
-  key is fine for the sandbox:
+  every replayed commit. No signing set up? A passwordless SSH
+  signing key is fine for the sandbox:
 
   ```bash
   ssh-keygen -t ed25519 -N '' -f ~/.ssh/sandbox-sign

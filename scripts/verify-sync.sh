@@ -10,15 +10,17 @@
 #   1. develop-sync exists and is a descendant of upstream/<branch>
 #   2. No merge commits in upstream..develop-sync
 #   3. No leftover conflict markers in tracked files
-#   4. Every downstream commit's patch-id survives the rebase, or is
-#      accounted for as absorbed upstream (same patch-id already on
-#      the parent)
-#   5. Merge oracle: a scratch three-way merge of upstream into the
-#      old base, resolved from the same rr-cache, produces the SAME
-#      tree as the rebase. Divergence = replay drift or an
-#      inconsistent resolution (the sync-era analogue of the §4a
-#      empty-diff invariant; cf. worklog §28). Skipped with a note
-#      when the scratch merge hits shapes the cache can't resolve.
+#   4. Merge oracle: a scratch three-way merge of upstream into the
+#      old base (over the RECORDED replay base when available),
+#      resolved from the same rr-cache, produces the SAME tree as the
+#      rebase. Divergence = replay drift or an inconsistent
+#      resolution (the sync-era analogue of the §4a empty-diff
+#      invariant; cf. worklog §28). Skipped with a note when the
+#      scratch merge hits shapes the cache can't resolve.
+#   5. Commit accounting over the recorded replay base: every own
+#      commit survives, is absorbed upstream (same patch-id), or —
+#      when the oracle proved tree equality — is blessed as a
+#      legitimate drop.
 #   6. Every commit above upstream is signed (team policy, worklog §31)
 #   7. origin/<branch> still equals the recorded base (fresh fetch —
 #      anything merged mid-sync means resync, since the publish lease
@@ -32,6 +34,10 @@ REPO=${1:?usage: verify-sync.sh <repo>}
 WT="$WORK_DIR/$REPO-sync"
 [[ -d "$WT/.git" ]] || die "no work tree at $WT — run sync.sh first"
 cd "$WT"
+
+# exact range walks on skewed linear history need a commit-graph AND
+# --topo-order (worklog §47); all ranges below use --topo-order
+git commit-graph write --reachable 2>/dev/null || true
 
 [[ -f .git/SYNC_STATE ]] || die "no sync state — run sync.sh first"
 # shellcheck disable=SC1091
@@ -62,9 +68,9 @@ else
 fi
 
 # 2
-merges=$(git rev-list --merges "$UPSTREAM_REF"..develop-sync 2>/dev/null | wc -l)
+merges=$(git rev-list --topo-order --merges "$UPSTREAM_REF"..develop-sync 2>/dev/null | wc -l)
 if [[ "$merges" -eq 0 ]]; then
-  ok "no merge commits above upstream ($(git rev-list --count "$UPSTREAM_REF"..develop-sync) linear commits)"
+  ok "no merge commits above upstream ($(git rev-list --topo-order --count "$UPSTREAM_REF"..develop-sync) linear commits)"
 else
   bad "$merges merge commit(s) above upstream"
 fi
@@ -78,52 +84,29 @@ else
   ok "no conflict markers in tracked files"
 fi
 
-# 4 — commit accounting: nothing silently lost in the replay.
-# Identity = author email + author date + subject (what rebase
-# preserves even through conflict resolution; patch-ids change
-# whenever a resolution or new context touches the diff). A commit
-# missing from develop-sync is fine only if its ORIGINAL patch is
-# already upstream (rebase drops it as already-applied).
-old_base=$(git merge-base "$BASE" "$UPSTREAM_REF")
-keys() { git log --no-merges --format='%ae|%at|%s' "$1" | sort; }
-missing=$(comm -23 <(keys "$old_base..$BASE") <(keys "$UPSTREAM_REF..develop-sync"))
-if [[ -z "$missing" ]]; then
-  ok "all $(git rev-list --count --no-merges "$old_base..$BASE") downstream commits replayed"
-else
-  up_pids=$(git rev-list --no-merges "$old_base..$UPSTREAM_REF" \
-    | while read -r c; do git show "$c" | git patch-id --stable | cut -d' ' -f1; done)
-  lost="" absorbed=0
-  while IFS='|' read -r ae at subj; do
-    [[ -z "$subj" ]] && continue
-    sha=$(git log --no-merges --format='%H|%ae|%at|%s' "$old_base..$BASE" \
-      | awk -F'|' -v ae="$ae" -v at="$at" -v s="$subj" '$2==ae && $3==at && $4==s {print $1; exit}')
-    pid=$(git show "$sha" | git patch-id --stable | cut -d' ' -f1)
-    if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$up_pids"; then
-      absorbed=$((absorbed+1))
-    else
-      lost+="$(git log -1 --format='%h %s' "$sha")\n"
-    fi
-  done <<<"$missing"
-  if [[ -z "$lost" ]]; then
-    ok "all downstream commits accounted for ($absorbed absorbed upstream)"
-  else
-    bad "downstream commit(s) missing from develop-sync and not absorbed upstream:"
-    printf '%b' "$lost" | sed 's/^/      /'
-    inf "  if check 5 passes, the change arrived as a different upstream patch — review, then judge"
-  fi
-fi
-
-# 5 — merge oracle: scratch merge tree must equal the rebase tree
+# 4 — merge oracle: scratch merge tree must equal the rebase tree.
+# When the replay base is recorded (S_FROM), merge a SYNTHETIC commit
+# carrying the upstream tree with S_FROM as its parent: the computed
+# merge base is then exactly the old parent tip instead of some
+# deep common ancestor, so the oracle works across parent republishes
+# (worklog §47). rerere still applies in the scratch worktree.
 oracle_dir=$(mktemp -d)
 owt="$oracle_dir/oracle"
+oracle=skip
+merge_target="$UPSTREAM_REF"
+if [[ -n "${S_FROM:-}" ]] && git merge-base --is-ancestor "$S_FROM" "$BASE" 2>/dev/null; then
+  merge_target=$(git commit-tree "$UPSTREAM_REF^{tree}" -p "$S_FROM" -m "oracle: upstream tree over recorded base")
+fi
 git worktree add -q --detach "$owt" "$BASE"
-git -C "$owt" merge --no-ff --no-commit "$UPSTREAM_REF" >/dev/null 2>&1 || true
+git -C "$owt" merge --no-ff --no-commit "$merge_target" >/dev/null 2>&1 || true
 o_remaining=$(git -C "$owt" rerere remaining 2>/dev/null || true)
 if [[ -z "$o_remaining" && -z "$(git -C "$owt" ls-files -u)" ]]; then
   o_tree=$(git -C "$owt" write-tree)
   if [[ "$o_tree" == "$(git rev-parse 'develop-sync^{tree}')" ]]; then
+    oracle=equal
     ok "merge oracle: scratch merge tree == rebase tree"
   else
+    oracle=differ
     bad "merge oracle: scratch merge tree differs from the rebase result"
     git -C "$owt" diff --shortstat "$o_tree" 'develop-sync^{tree}' 2>/dev/null | sed 's/^ */      /' || true
     inf "  replay drift or inconsistent resolution — fix the sync, don't explain the diff away"
@@ -137,10 +120,52 @@ git -C "$owt" merge --abort >/dev/null 2>&1 || true
 git worktree remove --force "$owt" >/dev/null 2>&1 || true
 rm -rf "$oracle_dir"
 
+# 5 — commit accounting: nothing silently lost in the replay.
+# Identity = author email + author date + subject (what rebase
+# preserves even through conflict resolution; patch-ids change
+# whenever a resolution or new context touches the diff). The
+# accounting base is the recorded replay base (S_FROM: the parent tip
+# of the PREVIOUS sync, via the lineage/base tag) so only this repo's
+# own delta is accounted; drops are fine when the patch is already
+# upstream, and an oracle-equal tree blesses any remainder.
+old_base=${S_FROM:-$(git merge-base "$BASE" "$UPSTREAM_REF")}
+keys() { git log --topo-order --no-merges --format='%ae|%at|%s' "$1" | sort; }
+missing=$(comm -23 <(keys "$old_base..$BASE") <(keys "$UPSTREAM_REF..develop-sync"))
+if [[ -z "$missing" ]]; then
+  ok "all $(git rev-list --topo-order --count --no-merges "$old_base..$BASE") downstream commits replayed"
+else
+  up_pids=$(git rev-list --topo-order --no-merges "$old_base..$UPSTREAM_REF" \
+    | while read -r c; do git show "$c" | git patch-id --stable | cut -d' ' -f1; done)
+  lost="" absorbed=0
+  while IFS='|' read -r ae at subj; do
+    [[ -z "$subj" ]] && continue
+    # no awk early-exit: closing the pipe mid-stream SIGPIPEs git log
+    # under pipefail and kills the whole script (exit 141)
+    sha=$(git log --topo-order --no-merges --format='%H|%ae|%at|%s' "$old_base..$BASE" \
+      | awk -F'|' -v ae="$ae" -v at="$at" -v s="$subj" '$2==ae && $3==at && $4==s && !f {print $1; f=1}')
+    pid=$(git show "$sha" | git patch-id --stable | cut -d' ' -f1)
+    if [[ -n "$pid" ]] && grep -qx "$pid" <<<"$up_pids"; then
+      absorbed=$((absorbed+1))
+    else
+      lost+="$(git log -1 --format='%h %s' "$sha")\n"
+    fi
+  done <<<"$missing"
+  if [[ -z "$lost" ]]; then
+    ok "all downstream commits accounted for ($absorbed absorbed upstream)"
+  elif [[ "$oracle" == "equal" ]]; then
+    ok "unmatched drops blessed by the merge oracle (tree-identical to the scratch merge):"
+    printf '%b' "$lost" | sed 's/^/      /'
+  else
+    bad "downstream commit(s) missing from develop-sync and not absorbed upstream:"
+    printf '%b' "$lost" | sed 's/^/      /'
+    inf "  and the merge oracle could not vouch (status: $oracle) — review, then judge"
+  fi
+fi
+
 # 6
 unsigned=$(count_unsigned . "$UPSTREAM_REF..develop-sync")
 if [[ "$unsigned" -eq 0 ]]; then
-  ok "all $(git rev-list --count "$UPSTREAM_REF..develop-sync") commits above upstream are signed"
+  ok "all $(git rev-list --topo-order --count "$UPSTREAM_REF..develop-sync") commits above upstream are signed"
 else
   bad "$unsigned unsigned commit(s) above upstream — team policy requires signed commits (worklog §31)"
 fi

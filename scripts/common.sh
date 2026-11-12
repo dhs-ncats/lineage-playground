@@ -89,7 +89,7 @@ count_unsigned() {
   local n=0 c
   while read -r c; do
     commit_signed "$1" "$c" || n=$((n+1))
-  done < <(git -C "$1" rev-list "$2")
+  done < <(git -C "$1" rev-list --topo-order "$2")
   echo "$n"
 }
 

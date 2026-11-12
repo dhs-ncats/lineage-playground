@@ -42,6 +42,9 @@ jobs:
       - name: Reject merge-from-upstream commits in this PR
         if: steps.lineage.outputs.skip != 'true'
         run: |
+          # linearized history carries committer-date skew; exact
+          # range walks need a commit-graph plus --topo-order
+          git commit-graph write --reachable 2>/dev/null || true
           base='${{ github.event.pull_request.base.sha }}'
           head='${{ github.event.pull_request.head.sha }}'
           bad=0
@@ -54,5 +57,5 @@ jobs:
                 bad=1
               fi
             done
-          done < <(git rev-list --merges --parents "$base..$head")
+          done < <(git rev-list --topo-order --merges --parents "$base..$head")
           exit $bad

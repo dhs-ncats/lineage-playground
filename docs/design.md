@@ -58,6 +58,16 @@ scripts/sync.sh --push <repo>   # interactive: push decoy + sync
   sync was built on (the publish lease value, in full in the PR-body
   marker). Its *tip* is the upstream commit the sync rebased onto —
   an ancestor of the head by construction.
+- `lineage/base` (a tag) — the parent tip this repo last synced onto,
+  set by the publish workflow (from the `lineage-sync:onto` body
+  marker). This is what makes tier ≥ 2 syncs tractable: a parent
+  publish rewrites every inherited SHA, so a plain
+  `rebase upstream/develop` would replay the repo's whole inherited
+  stack; `sync.sh` instead rebases `--onto upstream lineage/base`,
+  replaying **only this repo's own delta**. The same recorded base
+  lets verify-sync's merge oracle work across parent republishes
+  (synthetic merge-base). Absent tag (first sync, or tier-1 under the
+  never-rewritten root) → full rebase, which is then equivalent.
 
 ### Why a decoy base
 
