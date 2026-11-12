@@ -5,6 +5,10 @@ source "$(dirname "$0")/common.sh"
 
 CACHE_REMOTE=${CACHE_REMOTE:-"$ORG_URL/rerere-cache.git"}
 
+# callers may point CACHE_DIR anywhere (playground, gh extension) —
+# creating it is this script's job
+mkdir -p "$CACHE_DIR"
+
 if [[ -d "$CACHE_DIR/.git" ]]; then
   say "shared cache already initialised at $CACHE_DIR"
   ensure_identity "$CACHE_DIR"

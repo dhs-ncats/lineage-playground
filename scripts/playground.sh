@@ -44,6 +44,11 @@
 #   meddle skel|role   push a human commit onto that repo's
 #                      origin/lineage/sync — sets up the no-clobber
 #                      demo
+#   ext                publish/update the gh EXTENSION in the sandbox
+#                      ($PG_ORG/gh-skeleton): real upstream history +
+#                      our lineage subcommands and vendored harness
+#                      committed on top (the future cisagov PR shape).
+#                      Install: gh extension install $PG_ORG/gh-skeleton
 #   kit                publish/update the TEAM kit repo
 #                      ($PG_ORG/lineage-playground); maintainer-run,
 #                      this tree stays the source of truth
@@ -370,6 +375,50 @@ cmd_sync() {
     "$ROOT/scripts/sync.sh" --parent "$parent" "$repo" "$@"
 }
 
+# publish/update the gh EXTENSION in the sandbox: real cisagov
+# gh-skeleton history with our lineage subcommands + vendored harness
+# committed on top — the same commits a future upstream PR would carry.
+# Team install: gh extension install $PG_ORG/gh-skeleton
+cmd_ext() {
+  local name=gh-skeleton ext="$TMP/ext"
+  assert_sandbox "$name"
+  if ! repo_exists "$name"; then
+    say "creating $PG_ORG/$name (seed: $SEED_ORG/$name, full history)"
+    gh repo create "$PG_ORG/$name" --public \
+      --description "SANDBOX — gh skeleton extension + lineage sync subcommands (incubating; upstream: $SEED_ORG/$name)" >/dev/null
+    repo_exists "$name" || die "$PG_ORG/$name did not resolve canonically after creation"
+    git clone -q "https://github.com/$SEED_ORG/$name.git" "$ext"
+    git -C "$ext" remote add sandbox "$PG_URL/$name.git"
+    git -C "$ext" push -q sandbox develop:develop
+    gh api -X PATCH "repos/$PG_ORG/$name" -f default_branch=develop >/dev/null
+  else
+    git clone -q "$PG_URL/$name.git" "$ext"
+    git -C "$ext" remote add sandbox "$PG_URL/$name.git"
+  fi
+  cp "$ROOT/extension/gh-skeleton" "$ext/gh-skeleton"
+  mkdir -p "$ext/scripts"
+  cp "$ROOT/scripts/common.sh" "$ROOT/scripts/setup-shared-cache.sh" \
+     "$ROOT/scripts/linearize.sh" "$ROOT/scripts/verify-linearization.sh" \
+     "$ROOT/scripts/sync.sh" "$ROOT/scripts/verify-sync.sh" \
+     "$ROOT/scripts/publish.sh" "$ROOT/scripts/cache-push.sh" \
+     "$ROOT/scripts/show-stop.sh" "$ROOT/scripts/resolve-stop.sh" \
+     "$ROOT/scripts/continue-stop.sh" "$ROOT/scripts/smoke-test-sync.sh" \
+     "$ext/scripts/"
+  git -C "$ext" add gh-skeleton scripts
+  if git -C "$ext" -c commit.gpgsign=false diff --cached --quiet; then
+    say "extension is already up to date"
+  else
+    env "${UNSIGNED[@]}" git -C "$ext" commit -q \
+      -m "Add lineage sync and linearization subcommands" \
+      -m "Vendors the rerere linearization harness under scripts/ and
+dispatches sync/linearize/verify/verify-sync/publish/cache/stop/smoke
+to it, ahead of the existing option parser. State lives under
+GH_SKELETON_HOME (default ~/.local/share/gh-skeleton)."
+    git -C "$ext" push -q sandbox develop:develop
+    say "extension published: $PG_URL/$name (gh extension install $PG_ORG/$name)"
+  fi
+}
+
 cmd_kit() { # publish/update $PG_ORG/$KIT_REPO so the TEAM can play
   local kit="$TMP/kit"
   if ! repo_exists "$KIT_REPO"; then
@@ -497,6 +546,7 @@ case "$VERB" in
   interloper) cmd_interloper "$@";;
   meddle)     cmd_meddle "$@";;
   sync)       cmd_sync "$@";;
+  ext)        cmd_ext "$@";;
   kit)        cmd_kit "$@";;
   status)     cmd_status "$@";;
   nuke)       cmd_nuke "$@";;
