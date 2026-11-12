@@ -18,7 +18,9 @@ exercises `linearize.sh`'s archive-tag invariant, the same path the
 real campaign uses after a parent publishes. The conflicts you hit
 here are real cisagov conflict shapes.
 
-Everything is driven by `scripts/playground.sh`, which can only talk
+Syncs are driven through the **gh extension** (below); the sandbox
+itself — seeding, resets, upstream changes, interloper/meddle
+mischief — is driven by `scripts/playground.sh`, which can only talk
 to the sandbox org (it refuses cisagov) and uses an **isolated
 scenario rr-cache** under `work/playground/` so demo resolutions
 never enter the real shared cache.
@@ -55,10 +57,20 @@ shared state, so `reset` at the start of a session and say so in the
 team channel.
 
 ```bash
+source ./sandbox-env             # every session: point the extension
+                                 #   at the sandbox (NOT cisagov)
 scripts/playground.sh setup      # once (slow: linearizes both tiers)
 scripts/playground.sh reset      # anytime: back to the starting line
 scripts/playground.sh status     # where things stand
 ```
+
+The scenarios below drive syncs through the **extension** — install
+it per the README first. Sandbox manipulation (`setup`, `reset`,
+`upstream`, `interloper`, `meddle`, `status`) is always
+`scripts/playground.sh`; it exists only for the sandbox. No extension
+installed? Every `gh skeleton sync …` line has a playground
+shorthand: `scripts/playground.sh sync skel|role [same args]` (the
+tier keyword replaces the repo + `--parent` pair).
 
 Roles for a group run-through: **operator** (terminal), **reviewer**
 (browser), **interloper** (browser or terminal). Swap freely.
@@ -69,8 +81,8 @@ Roles for a group run-through: **operator** (terminal), **reviewer**
 
 ```bash
 scripts/playground.sh upstream clean        # generic gains a harmless commit
-scripts/playground.sh sync skel             # rebase + verify; zero stops
-scripts/playground.sh sync skel --push --yes
+gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
+gh skeleton sync --push --yes --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
 ```
 
 Reviewer: open the PR in `dhs-ncats/sandbox-skeleton-ansible-role`. Notice:
@@ -88,9 +100,9 @@ The payoff scenario. After scenario 1 published the skeleton, the
 *role* is now behind **its** upstream:
 
 ```bash
-scripts/playground.sh sync role             # upstream = the skeleton's
-                                            #   freshly published develop
-scripts/playground.sh sync role --push --yes
+# upstream = the skeleton's freshly published develop
+gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
+gh skeleton sync --push --yes --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
 ```
 
 Review and merge in `dhs-ncats/sandbox-ansible-role-banner` — same flow, one
@@ -103,7 +115,7 @@ each publish feeding the next tier's upstream.
 ```bash
 scripts/playground.sh reset
 scripts/playground.sh upstream conflict     # the dependabot ignore-block shape
-scripts/playground.sh sync skel             # and/or: cascade to the role
+gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role   # exits 2
 ```
 
 Both tiers customize that region in real life (the skeleton
@@ -116,8 +128,8 @@ new line AND the downstream customization), then:
 
 ```bash
 git -C work/playground/<repo>-sync add .github/dependabot.yml
-scripts/playground.sh sync <tier> --resume "note: kept upstream's upload-artifact line + our customization"
-scripts/playground.sh sync <tier> --push --yes
+gh skeleton sync --resume --parent <parent> <repo> "note: kept upstream's upload-artifact line + our customization"
+gh skeleton sync --push --yes --parent <parent> <repo>
 ```
 
 Reviewer: the PR body's resolution-log line shows the stop and your
@@ -129,7 +141,7 @@ resolution. Approve, merge, watch it publish.
 ```bash
 scripts/playground.sh reset                 # repos to baseline; CACHE kept
 scripts/playground.sh upstream conflict     # the SAME change again
-scripts/playground.sh sync skel             # completes: rerere resolved it
+gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role   # completes: rerere resolved it
 ```
 
 Same conflict, zero human input — `manual=0` in the totals. This is
@@ -141,7 +153,8 @@ forever (fleet-wide, via the shared cache, in production).
 ```bash
 scripts/playground.sh reset
 scripts/playground.sh upstream clean
-scripts/playground.sh sync skel && scripts/playground.sh sync skel --push --yes
+gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
+gh skeleton sync --push --yes --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
 scripts/playground.sh interloper skel       # feature commit reaches develop mid-review
 ```
 
@@ -155,9 +168,11 @@ says: `playground.sh sync skel --fresh`, push, fresh PR.
 ```bash
 scripts/playground.sh reset
 scripts/playground.sh upstream clean
-scripts/playground.sh sync skel && scripts/playground.sh sync skel --push --yes
+gh skeleton sync --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
+gh skeleton sync --push --yes --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
 scripts/playground.sh meddle skel           # human commit on origin/lineage/sync
-scripts/playground.sh sync skel --fresh && scripts/playground.sh sync skel --push --yes   # ← refuses
+gh skeleton sync --fresh --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role
+gh skeleton sync --push --yes --parent sandbox-skeleton-generic sandbox-skeleton-ansible-role   # ← refuses
 ```
 
 The push refuses with the marker mismatch message; the human's commit
