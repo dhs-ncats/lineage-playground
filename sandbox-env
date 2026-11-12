@@ -1,0 +1,15 @@
+# Source me from the kit root before using the gh extension against
+# the sandbox:  source ./sandbox-env
+#
+# The extension's DEFAULTS point at the real org (cisagov) on purpose
+# — it is the production tool. These overrides confine it to the
+# sandbox org and keep work trees, logs, and the rr-cache inside this
+# clone's work/playground/, isolated from the real shared cache.
+export ORG_URL=https://github.com/dhs-ncats
+export WORK_DIR="$PWD/work/playground"
+export LOG_DIR="$PWD/work/playground/logs"
+export CACHE_DIR="$PWD/work/playground/cache"
+if [ ! -d "$CACHE_DIR/.git" ]; then
+  echo "note: scenario cache not initialised yet — run: scripts/playground.sh setup   (or: gh skeleton cache init)"
+fi
+echo "sandbox env set: ORG_URL=$ORG_URL (work/cache under $WORK_DIR)"

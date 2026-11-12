@@ -497,21 +497,34 @@ Then follow the scenarios in `docs/playground.md`.
 The real tool-to-be lives at `@ORG@/gh-skeleton`: the actual
 cisagov/gh-skeleton history with the lineage subcommands committed on
 top (`sync`, `linearize`, `verify`, `verify-sync`, `publish`,
-`cache`, `stop`, `smoke`). To drive scenarios through it instead of
-the scripts:
+`cache`, `stop`, `smoke`).
+
+> **⚠ Default org: the extension assumes `cisagov`.** That is
+> deliberate — it is the production tool, and its defaults (clone
+> URLs, the shared rr-cache remote) point at the real org. Run it
+> bare in the sandbox and it will read real cisagov repos (pushes
+> stay gated: interactive-only, and `--yes` is refused for cisagov).
+> For sandbox play, ALWAYS source the env file first — it points
+> ORG_URL at `@ORG@` and keeps work trees and the rr-cache inside
+> this clone's `work/playground/`, isolated from the real cache.
 
 ```bash
 # gh allows ONE extension per name — swap out the cisagov one first:
 gh extension remove skeleton 2>/dev/null
 gh extension install @ORG@/gh-skeleton
+
+source ./sandbox-env              # REQUIRED for sandbox use (see above)
 gh skeleton smoke                 # sandboxed self-test
-# scenario syncs, extension style (same env the playground driver uses):
-ORG_URL=https://github.com/@ORG@ \
-  CACHE_DIR="$PWD/work/playground/cache" WORK_DIR="$PWD/work/playground" \
-  gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner …
+gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
+gh skeleton sync --push --yes --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
+
 # when done, restore the real one:
 gh extension remove skeleton && gh extension install cisagov/gh-skeleton
 ```
+
+Whether the default org should instead become a flag (matching
+`clone`'s `--src-org`/`--dest-org`) is an open question for the
+upstream PR — undecided for now.
 
 ## House rules
 
@@ -522,6 +535,25 @@ gh extension remove skeleton && gh extension install cisagov/gh-skeleton
   don't edit this repo directly.
 EOF
   sed "s/@ORG@/$PG_ORG/g" "$TMP/kit-readme" > "$kit/README.md"
+
+  cat > "$TMP/sandbox-env" <<'EOF'
+# Source me from the kit root before using the gh extension against
+# the sandbox:  source ./sandbox-env
+#
+# The extension's DEFAULTS point at the real org (cisagov) on purpose
+# — it is the production tool. These overrides confine it to the
+# sandbox org and keep work trees, logs, and the rr-cache inside this
+# clone's work/playground/, isolated from the real shared cache.
+export ORG_URL=https://github.com/@ORG@
+export WORK_DIR="$PWD/work/playground"
+export LOG_DIR="$PWD/work/playground/logs"
+export CACHE_DIR="$PWD/work/playground/cache"
+if [ ! -d "$CACHE_DIR/.git" ]; then
+  echo "note: scenario cache not initialised yet — run: scripts/playground.sh setup   (or: gh skeleton cache init)"
+fi
+echo "sandbox env set: ORG_URL=$ORG_URL (work/cache under $WORK_DIR)"
+EOF
+  sed "s/@ORG@/$PG_ORG/g" "$TMP/sandbox-env" > "$kit/sandbox-env"
 
   git -C "$kit" add -A
   if git -C "$kit" diff --cached --quiet; then

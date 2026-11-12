@@ -48,21 +48,34 @@ Then follow the scenarios in `docs/playground.md`.
 The real tool-to-be lives at `dhs-ncats/gh-skeleton`: the actual
 cisagov/gh-skeleton history with the lineage subcommands committed on
 top (`sync`, `linearize`, `verify`, `verify-sync`, `publish`,
-`cache`, `stop`, `smoke`). To drive scenarios through it instead of
-the scripts:
+`cache`, `stop`, `smoke`).
+
+> **⚠ Default org: the extension assumes `cisagov`.** That is
+> deliberate — it is the production tool, and its defaults (clone
+> URLs, the shared rr-cache remote) point at the real org. Run it
+> bare in the sandbox and it will read real cisagov repos (pushes
+> stay gated: interactive-only, and `--yes` is refused for cisagov).
+> For sandbox play, ALWAYS source the env file first — it points
+> ORG_URL at `dhs-ncats` and keeps work trees and the rr-cache inside
+> this clone's `work/playground/`, isolated from the real cache.
 
 ```bash
 # gh allows ONE extension per name — swap out the cisagov one first:
 gh extension remove skeleton 2>/dev/null
 gh extension install dhs-ncats/gh-skeleton
+
+source ./sandbox-env              # REQUIRED for sandbox use (see above)
 gh skeleton smoke                 # sandboxed self-test
-# scenario syncs, extension style (same env the playground driver uses):
-ORG_URL=https://github.com/dhs-ncats \
-  CACHE_DIR="$PWD/work/playground/cache" WORK_DIR="$PWD/work/playground" \
-  gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner …
+gh skeleton sync --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
+gh skeleton sync --push --yes --parent sandbox-skeleton-ansible-role sandbox-ansible-role-banner
+
 # when done, restore the real one:
 gh extension remove skeleton && gh extension install cisagov/gh-skeleton
 ```
+
+Whether the default org should instead become a flag (matching
+`clone`'s `--src-org`/`--dest-org`) is an open question for the
+upstream PR — undecided for now.
 
 ## House rules
 

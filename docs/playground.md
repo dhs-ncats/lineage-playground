@@ -35,8 +35,14 @@ committed on top (`gh skeleton sync|linearize|verify|verify-sync|
 publish|cache|stop|smoke`, dispatching into the vendored harness).
 Install it to drive scenarios the way the final tool will work (gh
 allows one extension per name, so temporarily swap the cisagov one
-out — the kit README has the exact commands). The future upstream PR
-is literally the sandbox repo's commits above cisagov's history.
+out — the kit README has the exact commands). **Caveat: the
+extension's default org is `cisagov`, on purpose** — run bare it
+reads real repos (pushes stay human-gated); for sandbox use always
+`source ./sandbox-env` in the kit first, which points it at the
+sandbox and keeps its rr-cache isolated. Whether the default becomes
+a flag (like `clone`'s `--src-org`) is an open question for the
+upstream PR. The future upstream PR is literally the sandbox repo's
+commits above cisagov's history.
 
 **Team access:** clone the kit —
 `gh repo clone dhs-ncats/lineage-playground` — and start at its
